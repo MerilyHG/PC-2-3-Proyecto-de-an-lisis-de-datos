@@ -1,0 +1,254 @@
+---
+title: "PC2-3_grupo_05_huamaní_merily"
+author: "HUAMANÍ MERILY"
+format: html
+editor: visual
+---
+
+# Introducción
+
+En este informe analiza los datos de pacientes con cirrosishepática, abarcando desde la limpieza e interpretación de la base de datos hasta el análisis descriptivo, pruebas inferenciales y un modelo predictivo.
+
+```{r}
+library(tidyverse)
+library(survival)
+library(survminer)
+library(randomForest)
+library(pROC)
+library(here)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(caret)
+library(randomForest)
+
+```
+
+# 1. Importación y Limpieza de Datos
+
+En esta etapa se realizó la importación y depuración de la base de datos de pacientes con cirrosis hepática.\
+Se eliminaron valores faltantes o inconsistentes, se estandarizaron las variables categóricas y numéricas (sexo, edad y supervivencia_días), y se validó la estructura general del conjunto de datos para asegurar su calidad antes del análisis estadístico.
+
+```{r}
+data_cirrosis <- read_csv("Cirrosis.csv")
+```
+
+```{r}
+# Reemplazar "NA" por NA real
+data_cirrosis <- data_cirrosis %>%
+  mutate(across(where(is.character), ~na_if(., "NA"))) %>%
+  mutate(across(where(is.character), ~trimws(.)))
+
+# Conversión de tipos de variables
+if ("edad" %in% names(data_cirrosis)) 
+  data_cirrosis <- data_cirrosis %>% mutate(edad = as.numeric(edad))
+
+if ("sexo" %in% names(data_cirrosis)) 
+  data_cirrosis <- data_cirrosis %>% mutate(sexo = as.factor(sexo))
+
+if ("supervivencia_dias" %in% names(data_cirrosis)) 
+  data_cirrosis <- data_cirrosis %>% mutate(supervivencia_dias = as.numeric(supervivencia_dias))
+
+# Resumen general
+glimpse(data_cirrosis)
+summary(data_cirrosis)
+```
+
+# 2. Análisis Descriptivo
+
+En esta sección se describen las principales características demográficas de los pacientes con cirrosis hepática, considerando su edad, sexo y promedio de edad por grupo.
+
+```{r}
+# Distribución de edad
+ggplot(data_cirrosis, aes(x = Edad)) +
+  geom_histogram(bins = 25, fill = "steelblue", color = "black") +
+  labs(title = "Distribución de la Edad de los Pacientes",
+       x = "Edad (años)", y = "Frecuencia")
+
+# Distribución por sexo
+data_cirrosis %>%
+  count(Sexo) %>%
+  ggplot(aes(x = Sexo, y = n, fill = Sexo)) +
+  geom_col() +
+  labs(title = "Distribución de Pacientes por Sexo",
+       x = "Sexo", y = "Cantidad")
+
+# Promedio de edad por sexo
+data_cirrosis %>%
+  group_by(Sexo) %>%
+  summarise(
+    media_edad = mean(Edad, na.rm = TRUE),
+    sd_edad = sd(Edad, na.rm = TRUE),
+    n = n()
+  )
+```
+
+**Interpretación:** En el histograma de edad se muestra una distribución aproximadamente normal, concentrada en un rango medio, lo que sugiere una población adulta homogénea en cuanto a edad. \
+\
+En la distribución por sexo se observa una mayor proporción de mujeres, representando la mayoría de los casos en comparación con los hombres.
+
+En el promedio de edad por sexo se revela que los hombres presentan una edad media ligeramente superior (≈20,348 años frente a ≈18,319 en mujeres).
+
+# 3. Pruebas Inferenciales
+
+En esta sección se evaluó si existen diferencias significativas en los niveles de bilirrubina según el tipo de medicamento administrado a los pacientes con cirrosis hepática.\
+\
+Se aplicó una prueba ANOVA seguida del análisis post-hoc de Tukey, comparando los grupos Placebo y D-penicilamina.
+
+```{r}
+# Verificar número de grupos
+length(unique(data_cirrosis$Medicamento))
+
+if (length(unique(data_cirrosis$Medicamento)) == 2) {
+  prueba_inferencial <- t.test(Bilirrubina ~ Medicamento, data = data_cirrosis)
+  print(prueba_inferencial)
+} else {
+  modelo_aov <- aov(Bilirrubina ~ Medicamento, data = data_cirrosis)
+  summary(modelo_aov)
+  TukeyHSD(modelo_aov)
+}
+```
+
+**Interpretación:** El resultado obtenido (`p = 0.1309`) indica que no existen diferencias estadísticamente significativas entre los tratamientos respecto a los niveles de bilirrubina, esto sugiere que, dentro de esta muestra, ambos medicamentos presentan un efecto similar sobre los valores de bilirrubina, sin evidencia de que uno sea más eficaz que el otro.
+
+# 4. Modelado Predictivo
+
+## 4.1 Análisis de Supervivencia (Kaplan-Meier)
+
+Se utilizó el método de Kaplan–Meier para estimar la probabilidad de supervivencia en pacientes con cirrosis hepática según el tipo de medicamento recibido.\
+Este análisis permite visualizar cómo varía la supervivencia a lo largo del tiempo en cada grupo de tratamiento, evidenciando posibles diferencias en la eficacia terapéutica.
+
+```{r}
+# Cargar paquetes
+library(dplyr)
+library(stringr)
+library(survival)
+library(survminer)
+
+# Crear variable de evento (1 = Fallecido, 0 = Vivo/Censurado)
+data_cirrosis <- data_cirrosis %>%
+  mutate(event = if_else(str_detect(tolower(Estado), "fallecid"), 1L, 0L))
+
+# Objeto de supervivencia (usar columna real de tiempo)
+surv_obj <- Surv(time = as.numeric(data_cirrosis$Dias_Seguimiento),
+                 event = data_cirrosis$event)
+# Ajustar modelo Kaplan–Meier por Medicamento
+fit_km <- survfit(surv_obj ~ Medicamento, data = data_cirrosis)
+```
+
+```{r}
+# Graficar curvas con tabla de riesgo
+ggsurvplot(
+  fit_km,
+  data = data_cirrosis,
+  conf.int = TRUE,
+  pval = TRUE,
+  risk.table = TRUE,
+  risk.table.col = "strata",
+  surv.median.line = "hv",
+  ggtheme = theme_minimal(),
+  title = "Curvas de Supervivencia Kaplan–Meier por Tipo de Medicamento",
+  legend.title = "Medicamento"
+)
+```
+
+**Interpretación:** Las curvas de supervivencia muestran una tendencia muy similar entre los grupos tratados con D-penicilamina y placebo.\
+El valor de p = 0.75 indica que no existen diferencias estadísticamente significativas en las probabilidades de supervivencia entre ambos tratamientos.\
+\
+Esto sugiere que, dentro del seguimiento realizado, ninguno de los medicamentos modificó de manera relevante la supervivencia de los pacientes con cirrosis, manteniéndose curvas casi paralelas a lo largo del tiempo.
+
+## 4.2 Modelo de Riesgos Proporcionales de Cox
+
+Este modelo permite estimar cómo cambia el riesgo de muerte en función de cada variable, controlando por las demás. Se empleó el modelo de Cox para evaluar cómo distintas variables clínicas ( la edad, bilirrubina, albúmina, tiempo de protrombina y tipo de medicamento) influyen en el riesgo de fallecimiento en pacientes con cirrosis hepática.\
+\
+Este análisis permite identificar qué factores aumentan o reducen la probabilidad de muerte, considerando el efecto simultáneo de todas las variables en el tiempo.
+
+```{r}
+data_cirrosis <- data_cirrosis %>%
+  mutate(
+    Medicamento = as.factor(Medicamento),
+    Bilirrubina = as.numeric(Bilirrubina),
+    Albumina = as.numeric(Albumina),
+    Edad = as.numeric(Edad),
+    Tiempo_Protrombina = as.numeric(Tiempo_Protrombina)
+  )
+
+modelo_cox <- coxph(
+  surv_obj ~ Medicamento + Bilirrubina + Albumina + Edad + Tiempo_Protrombina,
+  data = data_cirrosis
+)
+
+summary(modelo_cox)
+```
+
+**Interpretación:** Los resultados mostraron que el modelo tiene una concordancia de 0.82, lo que indica una buena capacidad para predecir el riesgo de muerte.\
+\
+Las variables que presentaron un efecto significativo (*p \< 0.05*) fueron:
+
+-   **Bilirrubina (HR = 1.13, p \< 0.001):** Niveles más altos aumentan el riesgo de fallecimiento, evidenciando una peor función hepática.
+
+-   **Albúmina (HR = 0.25, p \< 0.001):** Niveles bajos se asocian con mayor mortalidad, actuando como un factorprotector cuando sus valores son elevados.
+
+-   **Edad (p = 0.0003):** El riesgo incrementa ligeramente con la edad, lo que refleja una menor reserva fisiológica en pacientes mayores.
+
+-   **Tiempo de protrombina (HR = 1.33, p \< 0.001):** tiempos prolongados indican peor pronóstico y un mayor riesgo de muerte.
+
+En cambio, el tipo de medicamento (p = 0.80) no mostró un efecto significativo sobre la supervivencia, lo que sugiere que la D-penicilamina y el placebo tienen un impacto similar en la evolución de los pacientes.
+
+## 4.3 Modelo Predictivo
+
+Se utilizó el modelo Random Forest para estimar el riesgo de mortalidad en pacientes con cirrosis hepática.\
+\
+Este enfoque de aprendizaje automático genera múltiples árboles de decisión y combina sus resultados, lo que permite obtener predicciones más estables y precisas.\
+\
+Las variables empleadas son: edad, bilirrubina, albúmina y tiempo de protrombina fueron seleccionadas por su importancia clínica en la evolución de la enfermedad.\
+El modelo se entrenó con el 70 % de los datos y se validó con el 30 % restante, asegurando una evaluación equilibrada de su desempeño predictivo.
+
+```{r}
+pkgs <- c("caret","pROC","randomForest","listenv")
+to_install <- setdiff(pkgs, rownames(installed.packages()))
+if (length(to_install)) install.packages(to_install)
+library(caret)
+library(pROC)
+library(randomForest)
+```
+
+```{r}
+# Dividir datos en entrenamiento y prueba (70% / 30%)
+train_idx <- caret::createDataPartition(cirrosis$event, p = 0.7, list = FALSE)
+train <- cirrosis[train_idx, ]
+test  <- cirrosis[-train_idx, ]
+
+# Ajustar modelo Random Forest
+modelo_rf <- randomForest(
+  as.factor(event) ~ Edad + Bilirrubina + Albumina + Tiempo_Protrombina,
+  data = train,
+  ntree = 500,
+  na.action = na.roughfix,
+  importance = TRUE
+)
+
+# Predicciones sobre el conjunto de prueba
+pred <- predict(modelo_rf, newdata = test, type = "prob")[, 2]
+
+# Evaluar desempeño mediante curva ROC
+roc_obj <- roc(test$event, pred)
+auc_valor <- auc(roc_obj)
+cat("AUC del modelo Random Forest:", round(auc_valor, 3), "\n")
+
+# Graficar curva ROC
+plot(roc_obj, main = "Curva ROC - Modelo Random Forest")
+```
+
+\
+**Interpretación:** El valor de AUC = 0.823 indica que el modelo tiene una capacidad sólida para distinguir entre los pacientes que fallecieron y los que sobrevivieron.\
+\
+Mientras más se acerque el AUC a 1, mejor es la precisión del modelo; en este caso, el valor obtenido refleja que el modelo predice correctamente la mayoría de los casos.\
+\
+Esto significa que las variables usadas (edad, bilirrubina, albúmina y tiempo de protrombina) aportan información relevante para estimar el riesgo de fallecimiento en los pacientes con cirrosis.
+
+# Conclusión
+
+El análisis realizado permitió comprender mejor los factores que influyen en la evolución de los pacientes con cirrosis hepática.\
+Se observó que variables como la edad y las características clínicas (bilirrubina, albúmina y tiempo de protrombina) tienen un papel importante en la supervivencia.\
+Los modelos aplicados Kaplan-Meier, Cox y Random Forest mostraron un buen desempeño predictivo, lo que respalda su utilidad para estimar el riesgo de fallecimiento y apoyar el seguimiento clínico.
